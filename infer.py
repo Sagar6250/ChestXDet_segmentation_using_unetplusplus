@@ -1,0 +1,289 @@
+# import os
+# import torch
+# import numpy as np
+# import matplotlib.pyplot as plt
+# import matplotlib.patches as mpatches
+# from matplotlib import colormaps as cm
+# from dataset import ChestXDetDataset
+# import segmentation_models_pytorch as smp
+
+# # -----------------------------
+# # CONFIG
+# # -----------------------------
+# device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# num_classes = 13
+# checkpoint_path = "/scratch/ssubbar8/Segmentation/models/first run/epoch_10.pth"
+# out_dir = "/scratch/ssubbar8/Segmentation/Inference_Results"
+# test_img_dir = "/scratch/ssubbar8/Segmentation/test_data/test"
+# test_mask_dir = "/scratch/ssubbar8/Segmentation/test_data/mask"
+
+# os.makedirs(out_dir, exist_ok=True)
+
+# disease_names = [
+#     "Atelectasis", "Calcification", "Cardiomegaly", "Consolidation",
+#     "Diffuse Nodule", "Effusion", "Emphysema", "Fibrosis",
+#     "Fracture", "Mass", "Nodule", "Pleural Thickening", "Pneumothorax"
+# ]
+
+# # -----------------------------
+# # LOAD DATASET
+# # -----------------------------
+# test_dataset = ChestXDetDataset(test_img_dir, test_mask_dir)
+
+# # -----------------------------
+# # LOAD MODEL
+# # -----------------------------
+# model = smp.UnetPlusPlus(
+#     encoder_name="resnet50",
+#     encoder_weights=None,
+#     in_channels=3,
+#     classes=num_classes,
+# ).to(device)
+
+# ckpt = torch.load(checkpoint_path, map_location=device)
+# if "model_state_dict" in ckpt:
+#     model.load_state_dict(ckpt["model_state_dict"])
+#     print(f"✅ Loaded model state dict from checkpoint (epoch={ckpt.get('epoch', 'unknown')})")
+# else:
+#     model.load_state_dict(ckpt)
+#     print("✅ Loaded raw state dict checkpoint")
+
+# model.eval()
+
+# # -----------------------------
+# # MASK OVERLAY FUNCTION
+# # -----------------------------
+# def overlay_masks(img, mask, class_names, alpha=0.5):
+#     """
+#     Overlay multi-class mask on an image with legend for present classes.
+#     Returns the overlay image and legend handles.
+#     """
+#     if isinstance(img, torch.Tensor):
+#         if img.ndim == 3 and img.shape[0] == 3:
+#             img = img.permute(1, 2, 0).cpu().numpy()
+#         else:
+#             img = np.array(img.cpu())
+#     img = np.clip(img, 0, 1)
+
+#     mask = mask.cpu().numpy() if isinstance(mask, torch.Tensor) else mask
+#     C, H, W = mask.shape
+
+#     # ✅ Updated for Matplotlib 3.7+
+#     cmap = plt.colormaps["tab20"]
+
+#     overlay = img.copy()
+#     handles = []
+
+#     for i in range(C):
+#         class_mask = mask[i] > 0.5
+#         if np.sum(class_mask) == 0:
+#             continue
+#         color = np.array(cmap(i / C)[:3])  # evenly spaced colors
+#         overlay[class_mask] = (1 - alpha) * overlay[class_mask] + alpha * color
+#         handles.append(mpatches.Patch(color=color, label=class_names[i]))
+
+#     return overlay, handles
+
+
+# # -----------------------------
+# # RUN INFERENCE
+# # -----------------------------
+# print("🧪 Running inference on 10 random test samples...")
+
+# with torch.no_grad():
+#     indices = np.random.choice(len(test_dataset), size=10, replace=False)
+#     for i, idx in enumerate(indices):
+#         img, mask = test_dataset[idx]
+#         img_tensor = img.unsqueeze(0).to(device)
+#         pred = torch.sigmoid(model(img_tensor))[0].cpu()
+
+#         # Generate overlays
+#         gt_overlay, gt_handles = overlay_masks(img, mask, disease_names)
+#         pred_overlay, pred_handles = overlay_masks(img, pred, disease_names)
+
+#         # Merge all unique legend entries
+#         handles_dict = {h.get_label(): h for h in gt_handles + pred_handles}
+#         all_handles = list(handles_dict.values())
+
+#         # Create single figure
+#         fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+#         axes[0].imshow(np.transpose(img.numpy(), (1, 2, 0)))
+#         axes[0].set_title("Original Image")
+#         axes[0].axis("off")
+
+#         axes[1].imshow(gt_overlay)
+#         axes[1].set_title("Ground Truth")
+#         axes[1].axis("off")
+
+#         axes[2].imshow(pred_overlay)
+#         axes[2].set_title("Prediction")
+#         axes[2].axis("off")
+
+#         # Shared legend for all present classes
+#         if all_handles:
+#             fig.legend(
+#                 handles=all_handles,
+#                 bbox_to_anchor=(1.02, 0.95),
+#                 loc="upper left",
+#                 title="Diseases",
+#                 fontsize=8,
+#             )
+
+#         plt.tight_layout()
+#         save_path = os.path.join(out_dir, f"sample_{i+1}.png")
+#         plt.savefig(save_path, bbox_inches="tight", dpi=200)
+#         plt.close(fig)
+
+# print(f"✅ Inference complete. Results saved to: {out_dir}")
+
+    # # ==== CONFIG ====
+    # images_path = "/scratch/ssubbar8/Segmentation/test_data"
+    # split = "test"  # or "test"
+    # checkpoint_path = "/scratch/ssubbar8/Segmentation/models/best_model.pth"
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    # save_dir = "/scratch/ssubbar8/Segmentation/Inference/3rd_run"
+
+import torch
+from torch.utils.data import DataLoader, Subset
+from tqdm import tqdm
+import numpy as np
+import segmentation_models_pytorch as smp
+import cv2
+import os
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from dataset import ChestXDetDataset  # your dataset class
+
+
+def load_unetplusplus(checkpoint_path, num_classes, in_channels=1, encoder_name="resnet50", device='cuda'):
+    """
+    Loads a Unet++ model from segmentation_models_pytorch with given encoder and weights.
+    """
+    model = smp.UnetPlusPlus(
+        encoder_name=encoder_name,
+        encoder_weights=None,  # grayscale input
+        in_channels=in_channels,
+        classes=num_classes,
+        activation=None,
+    )
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    state_dict = checkpoint.get('model_state_dict', checkpoint)
+    model.load_state_dict(state_dict, strict=False)
+    model.to(device)
+    model.eval()
+    return model
+
+
+def run_inference(model, dataset, batch_size=2, num_workers=2, device='cuda'):
+    """
+    Run inference on the first 10 samples of the dataset.
+    Returns predicted masks and ground-truth masks as numpy arrays.
+    """
+    # subset = Subset(dataset, range(10))  # first 10 samples only
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
+    pred_masks = []
+    true_masks = []
+
+    with torch.no_grad():
+        for imgs, masks in tqdm(dataloader, desc="Running inference (first 10 samples)"):
+            imgs = imgs.to(device)
+            outputs = model(imgs)
+
+            preds = torch.sigmoid(outputs)
+            preds = (preds > 0.98).float()
+
+            pred_masks.append(preds.cpu().numpy())
+            true_masks.append(masks.numpy())
+
+    pred_masks = np.concatenate(pred_masks, axis=0)
+    true_masks = np.concatenate(true_masks, axis=0)
+    return pred_masks, true_masks
+
+
+def visualize_and_save(dataset, pred_masks, true_masks, save_dir, show=False):
+    """
+    Overlay predictions and ground truths on the original image,
+    color each class differently, and save side-by-side visualization.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    COLORS = plt.cm.tab20(np.linspace(0, 1, len(dataset.disease_labels)))[:, :3]  # RGB colors
+    class_names = dataset.disease_labels
+
+    for i in range(len(pred_masks)):
+        # Load the original image (grayscale)
+        img_path = dataset.img_list[i]
+        image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        image = cv2.resize(image, dataset.image_size)
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB) / 255.0
+
+        overlay_gt = image_rgb.copy()
+        overlay_pred = image_rgb.copy()
+
+        for c, cname in enumerate(class_names):
+            color = COLORS[c]
+            gt_mask = true_masks[i, c].astype(bool)
+            pred_mask = pred_masks[i, c].astype(bool)
+
+            overlay_gt[gt_mask] = 0.5 * overlay_gt[gt_mask] + 0.5 * color
+            overlay_pred[pred_mask] = 0.5 * overlay_pred[pred_mask] + 0.5 * color
+
+        combined = np.hstack((overlay_gt, overlay_pred))
+
+        # Create legend
+        patches = [mpatches.Patch(color=COLORS[c], label=class_names[c]) for c in range(len(class_names))]
+
+        plt.figure(figsize=(12, 6))
+        plt.imshow(combined)
+        plt.axis("off")
+        plt.title(f"Sample {i+1} — Left: Ground Truth | Right: Prediction")
+        plt.legend(handles=patches, bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small')
+        plt.tight_layout()
+
+        save_path = os.path.join(save_dir, f"overlay_{i}.png")
+        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+        if show:
+            plt.show()
+        plt.close()
+
+    print(f"✅ Saved {len(pred_masks)} overlay visualizations to {save_dir}/")
+
+
+if __name__ == "__main__":
+    # ==== CONFIG ====
+    images_path = "/scratch/ssubbar8/Segmentation/test_data"
+    split = "test"
+    checkpoint_path = "/scratch/ssubbar8/Segmentation/models/0.8_0.2_1e-4_resnet50_from70/best_model.pth"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    save_dir = "/scratch/ssubbar8/Segmentation/Inference/0.8_0.2_1e-4_resnet50_from70_0.98_alltest"
+
+    # ==== LOAD DATASET ====
+    dataset = ChestXDetDataset(
+        images_path=images_path,
+        split=split,
+        image_size=(512, 512),
+        anno_percent=100,
+        normalization="imagenet"
+    )
+
+    num_classes = len(dataset.disease_labels)
+
+    # ==== LOAD MODEL ====
+    model = load_unetplusplus(
+        checkpoint_path=checkpoint_path,
+        num_classes=num_classes,
+        in_channels=3,          # grayscale input
+        encoder_name="resnet50",
+        device=device
+    )
+
+    # ==== RUN INFERENCE ====
+    pred_masks, true_masks = run_inference(model, dataset, batch_size=2, num_workers=2, device=device)
+
+    print("✅ Predicted mask shape:", pred_masks.shape)
+    print("✅ Ground truth mask shape:", true_masks.shape)
+
+    # ==== VISUALIZE & SAVE ====
+    visualize_and_save(dataset, pred_masks, true_masks, save_dir, show=False)
