@@ -4,3 +4,4 @@ Logs/
 unrel/
 __pycache__/
 *.pyc
+convert_mask.py
